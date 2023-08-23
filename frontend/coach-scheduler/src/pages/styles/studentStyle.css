@@ -1,0 +1,9 @@
+.studentContainer{
+    display: flex;
+    flex-direction: row;
+    justify-content:space-evenly
+}
+
+.hiText{
+    text-align: center;
+}

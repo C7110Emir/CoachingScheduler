@@ -2,17 +2,18 @@ import React from "react";
 import Coach from "./Coach";
 import Student from "./Student";
 
-const Home = ({ userData, renderValue }) => {
+const Home = ({ userEmail, userPassword, renderValue, timeToLocal }) => {
   return (
     <>
-    {console.log(userData)}
-      {renderValue === 1 ? (
-        <Student studentData={userData} />
+      {renderValue === "1" ? (
+        <Student studentEmail={userEmail} timeToLocal={timeToLocal} studentPassword={userPassword}/>
       ) : (
-        <Coach coachData={userData} />
+        <Coach coachEmail={userEmail} timeToLocal={timeToLocal} coachPassword={userPassword}/>
       )}
     </>
   );
 };
 
 export default Home;
+
+

@@ -6,6 +6,8 @@ from flask import Flask, request
 import sqlite3
 from flask_sqlalchemy import SQLAlchemy
 import json
+from datetime import datetime, timedelta
+import pytz
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -18,7 +20,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = 'sqlite:///' + file_path
 db = SQLAlchemy(app)
 
 
-def get_data(coachEmail, coachPassword, coach):
+def get_data(coach):
 
     get_slots = []
 
@@ -40,30 +42,37 @@ def get_data(coachEmail, coachPassword, coach):
             'is_booked': slot.is_booked,
             'is_ended': slot.is_ended
         }
-
         get_slots.append(slot_data)
+        
 
-    booked_slots = Slots.query.filter_by(is_booked=1, coach_id=coachId)
-
+    # booked_slots = Slots.query.filter_by(is_booked=1, coach_id=coachId)
+    booked_slots = db.session.query(Slots, Student).join(
+        Student, Slots.student_id == Student.id).filter(Slots.is_booked == 1, Slots.is_ended == 0, Slots.coach_id == coachId )
+    
+    
     scheduled_slots = []
-    for booked_slot in booked_slots:
+    for booked_slot, student in booked_slots:
+    
         booked_data = {
             'id': booked_slot.id,
             'coach_id': booked_slot.coach_id,
             'student_id': booked_slot.student_id,
+            'student_name': student.name,
             'start_time': booked_slot.start_time,
             'end_time': booked_slot.end_time,
             'is_booked': booked_slot.is_booked,
             'is_ended': booked_slot.is_ended
         }
         scheduled_slots.append(booked_data)
+        
+
 
     ended_sessions = []
 
-    results = db.session.query(Slots, Feedbacks).join(
-        Feedbacks, Slots.id == Feedbacks.slot_id).filter(Slots.is_booked == 1, Slots.is_ended == 1, Slots.coach_id == coachId, Feedbacks.coach_id == coachId).all()
+    results = db.session.query(Slots, Feedbacks, Student).join(
+        Feedbacks, Slots.id == Feedbacks.slot_id).join(Student, Slots.student_id == Student.id).filter(Slots.is_booked == 1, Slots.is_ended == 1, Slots.coach_id == coachId, Feedbacks.coach_id == coachId).all()
 
-    for booked_s, feedback in results:
+    for booked_s, feedback, student in results:
         ended_sessions.append(
             {
                 'id': booked_s.id,
@@ -71,20 +80,20 @@ def get_data(coachEmail, coachPassword, coach):
                 'student_id': booked_s.student_id,
                 'start_time': booked_s.start_time,
                 'end_time': booked_s.end_time,
+                'student_name': student.name,
                 'is_booked': booked_s.is_booked,
                 'is_ended': booked_s.is_ended,
                 'rating': feedback.rating,
                 'message': feedback.message,
                 'slot_id': feedback.slot_id,
-
             }
         )
+        
+    print(ended_sessions)
 
     data = {
         "coach_info": coach,
-        "displayInfo": {
-            "available_slots": get_slots
-        },
+        "available_slots": get_slots,
         "scheduled_slots": scheduled_slots,
         "ended_sessions":  ended_sessions
     }
@@ -189,10 +198,12 @@ def get_student(student_email, student_password):
 
 async def coachAuthentication(coachEmail, coachPassword):
     coach = getCoach(coachEmail, coachPassword)
+    
+    print(coach)
 
     if len(coach) > 0:
-        return get_data(coachEmail, coachPassword, coach)
-    return "Login failed. Invalid email or password"
+        return get_data(coach)
+    return  Exception("login failed")
 
 
 def addAvailibilitySlotForCoach(coachId, startDateTime, endDateTime):
@@ -201,18 +212,38 @@ def addAvailibilitySlotForCoach(coachId, startDateTime, endDateTime):
     return addAvailibility
 
 
-@app.route("/coach/auth", methods=["POST"])
-async def authenticate_coach():
-    print(request.json)
+@app.route("/schedule-slot", methods=["POST"])
+def schedule_slot():
     requestBody = request.json
     parsedBody = json.loads(requestBody["body"])
+    
+    slot_id = parsedBody["slot_id"]
+    student_id = parsedBody["student_id"]
+    
+    print(slot_id, student_id)
+    slot = Slots.query.filter_by(id = slot_id).first()
+    
+    slot.student_id = student_id
+    slot.is_booked = 1
+    
+    db.session.commit()
+    
+    return "successful"
+
+
+@app.route("/coach/auth", methods=["POST"])
+async def authenticate_coach():
+    requestBody = request.json
+    parsedBody = json.loads(requestBody["body"])
+    # parsedBody = requestBody["body"]
     # emailRegex = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b'
     coachEmail = parsedBody["email"]
     coachPassword = parsedBody["password"]
     # if not re.match(emailRegex, coachEmail):
     #     return "Invalid Email Address"
-    print(coachEmail)
-    return await coachAuthentication(coachEmail, coachPassword)
+    serviceResponse = await coachAuthentication(coachEmail, coachPassword)
+    print("service ", serviceResponse)
+    return serviceResponse
 
 
 def get_slots(student):
@@ -221,25 +252,49 @@ def get_slots(student):
     for dict in student:
         sid = dict['id']
 
-    booked_slots = Slots.query.filter_by(is_booked=0, student_id=sid)
+    # booked_slots_query = Slots.query.filter_by(is_booked=1, student_id=sid, is_ended=0)
+    # available_slots_query = Slots.query.filter_by(is_booked=0).limit(5)
+    # results = db.session.query(Slots, Feedbacks, Student).join(
+    #     Feedbacks, Slots.id == Feedbacks.slot_id).join(Student, Slots.student_id == Student.id).filter(Slots.is_booked == 1, Slots.is_ended == 1, Slots.coach_id == coachId, Feedbacks.coach_id == coachId).all()
 
-    savilable_slots = []
-    for booked_slot in booked_slots:
+    booked_slot_results = db.session.query(Slots, Coach).join(Coach, Slots.coach_id == Coach.id).filter(Slots.is_booked == 1, Slots.student_id == sid, Slots.is_ended == 0)
+    available_results = db.session.query(Slots, Coach).join(Coach, Slots.coach_id == Coach.id).filter(Slots.is_booked == 0, Slots.is_ended == 0).limit(5)
+
+    available_slots = []
+    booked_slots = []
+    for booked_slot, coach in booked_slot_results:
         booked_data = {
             'id': booked_slot.id,
             'coach_id': booked_slot.coach_id,
             'student_id': booked_slot.student_id,
+            'coach_name': coach.name,
             'start_time': booked_slot.start_time,
             'end_time': booked_slot.end_time,
             'is_booked': booked_slot.is_booked,
             'is_ended': booked_slot.is_ended
         }
-
-        savilable_slots.append(booked_data)
+        
+        booked_slots.append(booked_data)
+    
+    for available_slot, coach in available_results:
+        available_slot_data = {
+            'id': available_slot.id,
+            'coach_id': available_slot.coach_id,
+            'student_id': available_slot.student_id,
+            'start_time': available_slot.start_time,
+            'coach_name': coach.name,
+            'end_time': available_slot.end_time,
+            'is_booked': available_slot.is_booked,
+            'is_ended': available_slot.is_ended
+        }
+        
+        available_slots.append(available_slot_data)
+        
+    
     data = {
         "student_info": student,
-        "lable_slots": savilable_slots,
-
+        "booked_slots_for_student": booked_slots,
+        "available_slots": available_slots
     }
     return json.dumps(data)
 
@@ -249,14 +304,32 @@ async def studentAuthentication(student_email, student_password):
 
     if len(student) > 0:
         return get_slots(student)
-    return "Login failed. Invalid email or password "
+    return Exception("login failed")
 
+def checkSlotsTable(coach_id, start_time, end_time):
+    booked_slot_query = Slots.query.filter_by(coach_id=coach_id, start_time=start_time, end_time=end_time)
+    
+    added_slot = []
+    for slot in booked_slot_query:
+        booked_data = {
+            'id': slot.id,
+            'coach_id': slot.coach_id,
+            'student_id': slot.student_id,
+            'start_time': slot.start_time,
+            'end_time': slot.end_time,
+            'is_booked': slot.is_booked,
+            'is_ended': slot.is_ended
+        }
+
+        added_slot.append(booked_data)
+    return added_slot
 
 @app.route("/student/auth", methods=["POST"])
 async def authenticate_student():
     print(request.json)
     requestBody = request.json
     parsedBody = json.loads(requestBody["body"])
+    # parsedBody = requestBody["body"]
     # emailRegex = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b'
     student_email = parsedBody["email"]
     student_password = parsedBody["password"]
@@ -269,31 +342,43 @@ async def authenticate_student():
 async def addAvailibilitySlot():
     requestBody = request.json
     parsedBody = json.loads(requestBody["body"])
+    
+    print(parsedBody)
 
-    end_time = parsedBody("end_time")
-    start_time = parsedBody("start_time")
-    coach_id = parsedBody("coach_id")
-    slots = Slots(coach_id, None, start_time, end_time )
+    end_time = parsedBody["end_time"]
+    start_time = parsedBody["start_time"]
+    coach_id = parsedBody["coach_id"]
+    slots = Slots(coach_id, None, start_time, end_time, 0, 0 )
     db.session.add(slots)
     db.session.commit()
+    
+    newly_added_slot = checkSlotsTable(coach_id, start_time, end_time)
+    if len(newly_added_slot) > 0:
+        return json.dumps(newly_added_slot)
+    return "couldn't find newly added data"
 
 
-@app.route("/feedback", methods=["GET"])
+@app.route("/submit-feedback", methods=["POST"])
 def add_feedback():
     
     requestBody = request.json
     parsedBody = json.loads(requestBody["body"])
 
-    rating = parsedBody("rating")
-    message = parsedBody("message")
-    slot_id = parsedBody("slot_id")
-    coach_id = parsedBody("coach_id")
+    rating = parsedBody["rating"]
+    message = parsedBody["message"]
+    slot_id = parsedBody["slot_id"]
+    coach_id = parsedBody["coach_id"]
     feedback = Feedbacks(rating, message, slot_id, coach_id)
     db.session.add(feedback)
     db.session.commit()
+    
+    slot = Slots.query.filter_by(id = slot_id).first()
+    
+    slot.is_ended = 1
+    
+    db.session.commit()
 
     return "Feedback added successfuly"
-
 
 @app.route('/', methods=["GET"])
 def run_app():

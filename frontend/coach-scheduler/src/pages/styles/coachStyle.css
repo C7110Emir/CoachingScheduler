@@ -1,0 +1,12 @@
+.coachContainer {
+    display:flex;
+    flex-direction: row;
+    justify-content:space-between
+}
+.coachHiText {
+    text-align: center;
+}
+
+.upcomingScheduleHeader, .endedSessionsHeader, .addAvailibilityHeader {
+    text-align: center;
+}
